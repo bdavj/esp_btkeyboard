@@ -1,0 +1,4 @@
+# Overlay for a generic ESP32-S3-DevKitC-1 (use the port labelled "USB", not "UART")
+CONFIG_ESPKB_BUTTON_GPIO=0
+CONFIG_ESPKB_LED_GPIO=48
+CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y

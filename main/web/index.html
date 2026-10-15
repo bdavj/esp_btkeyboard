@@ -1,0 +1,322 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#111418">
+<title>espkb</title>
+<style>
+:root{--bg:#111418;--panel:#1b2027;--key:#2a313b;--keyhi:#3b4552;--txt:#e8ecf1;--dim:#8a95a3;--acc:#3d8bfd;--lock:#f5a524;--ok:#2fbf71;--bad:#e5484d}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;background:var(--bg);color:var(--txt);font:15px/1.3 -apple-system,system-ui,sans-serif}
+body{padding:8px max(8px,env(safe-area-inset-right)) 32px max(8px,env(safe-area-inset-left))}
+section{background:var(--panel);border-radius:12px;padding:10px;margin-bottom:10px}
+h2{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--dim);margin:0 0 8px}
+#status{display:flex;flex-wrap:wrap;gap:6px 14px;align-items:center;font-size:13px}
+.dot{display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--bad);margin-right:5px;vertical-align:middle}
+.dot.on{background:var(--ok)}.dot.warn{background:var(--lock)}
+#banner{display:none;background:#3a2a5a;border-radius:12px;padding:12px;margin-bottom:10px;text-align:center}
+#banner b{font-size:30px;letter-spacing:.12em;display:block;font-variant-numeric:tabular-nums}
+.mods{position:sticky;top:0;z-index:5;display:grid;grid-template-columns:repeat(4,1fr);gap:6px;background:var(--bg);padding:4px 0 8px}
+.grid{display:grid;gap:6px}
+.g4{grid-template-columns:repeat(4,1fr)}.g6{grid-template-columns:repeat(6,1fr)}.g3{grid-template-columns:repeat(3,1fr)}
+button,.k{appearance:none;border:0;border-radius:8px;background:var(--key);color:var(--txt);font:inherit;font-size:15px;min-height:44px;padding:0 4px;
+  touch-action:manipulation;user-select:none;-webkit-user-select:none;cursor:pointer}
+button.down,.k.down{background:var(--acc)}
+.mod.once{background:var(--acc)}.mod.lock{background:var(--lock);color:#000}
+.arrows{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
+textarea{width:100%;min-height:96px;border-radius:8px;border:1px solid var(--keyhi);background:#0c0f12;color:var(--txt);font:16px/1.4 ui-monospace,Menlo,monospace;padding:8px;resize:vertical}
+.row{display:flex;gap:6px;margin-top:6px;align-items:center}
+.row button{flex:1}
+label{display:flex;gap:6px;align-items:center;color:var(--dim);font-size:13px}
+.kb .r{display:flex;gap:4px;margin-bottom:4px}
+.kb .k{flex:1 1 0;min-width:0;min-height:42px;font-size:13px;padding:0}
+.danger{background:#4a2326}
+.chips{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-top:8px}
+.chip{min-height:36px;font-size:14px}.chip.on{background:var(--acc)}
+#spam-row{justify-content:space-between}
+#spam-row label{font-size:16px;color:var(--txt)}
+#spam-row input{width:22px;height:22px}
+#spam-t{font-variant-numeric:tabular-nums}
+section.spamming{outline:2px solid var(--lock)}
+.small{font-size:12px;color:var(--dim)}
+details summary{cursor:pointer;color:var(--dim);font-size:12px;text-transform:uppercase;letter-spacing:.06em;list-style:none}
+details summary::before{content:"▸ "}details[open] summary::before{content:"▾ "}
+</style>
+</head>
+<body>
+
+<section id="status">
+  <span><span id="d-ws" class="dot"></span>Link</span>
+  <span><span id="d-usb" class="dot"></span><span id="t-usb">USB</span></span>
+  <span id="t-kb" class="small">no keyboards</span>
+  <span id="t-q" class="small"></span>
+</section>
+
+<div id="banner"><span id="banner-t">Pairing: put your keyboard in pairing mode…</span><b id="pk"></b></div>
+
+<div class="mods">
+  <button class="mod" data-mod="1">Ctrl</button>
+  <button class="mod" data-mod="2">Shift</button>
+  <button class="mod" data-mod="4">Alt</button>
+  <button class="mod" data-mod="8">Win/⌘</button>
+</div>
+
+<section id="spam-sec">
+  <h2>BIOS spam</h2>
+  <div class="row" id="spam-row" style="margin-top:0">
+    <label><input type="checkbox" id="spam"> Spam boot keys</label>
+    <span id="spam-t" class="small"></span>
+  </div>
+  <div class="chips" id="chips">
+    <button class="chip on" data-sk="76">Del</button>
+    <button class="chip on" data-sk="41">Esc</button>
+    <button class="chip on" data-sk="59">F2</button>
+    <button class="chip on" data-sk="69">F12</button>
+    <button class="chip" data-sk="58">F1</button>
+    <button class="chip" data-sk="67">F10</button>
+    <button class="chip" data-sk="68">F11</button>
+    <button class="chip" data-sk="40">Enter</button>
+  </div>
+  <div class="small" style="margin-top:6px">Cycles the selected keys until the machine enters setup (stops after 60s). Keeps running if your phone locks.</div>
+</section>
+
+<section>
+  <h2>Keys</h2>
+  <div class="grid g4" style="margin-bottom:6px">
+    <button data-k="41">Esc</button><button data-k="43">Tab</button>
+    <button data-k="42">⌫</button><button data-k="40">Enter</button>
+  </div>
+  <div class="grid g6" style="margin-bottom:6px">
+    <button data-k="58">F1</button><button data-k="59">F2</button><button data-k="60">F3</button>
+    <button data-k="61">F4</button><button data-k="62">F5</button><button data-k="63">F6</button>
+    <button data-k="64">F7</button><button data-k="65">F8</button><button data-k="66">F9</button>
+    <button data-k="67">F10</button><button data-k="68">F11</button><button data-k="69">F12</button>
+  </div>
+  <div class="grid g3" style="grid-template-columns:1fr 1fr;gap:10px">
+    <div class="grid g3">
+      <button data-k="73">Ins</button><button data-k="74">Home</button><button data-k="75">PgUp</button>
+      <button data-k="76">Del</button><button data-k="77">End</button><button data-k="78">PgDn</button>
+    </div>
+    <div class="arrows">
+      <span></span><button data-k="82">↑</button><span></span>
+      <button data-k="80">←</button><button data-k="81">↓</button><button data-k="79">→</button>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>Combos</h2>
+  <div class="grid g3">
+    <button data-k="76" data-m="5">Ctrl+Alt+Del</button>
+    <button data-k="43" data-m="4">Alt+Tab</button>
+    <button data-k="15" data-m="8">Win+L</button>
+    <button data-k="0" data-m="8">Win</button>
+    <button data-k="44" data-m="8">⌘+Space</button>
+    <button data-k="70">PrtSc</button>
+  </div>
+</section>
+
+<section>
+  <h2>Type text</h2>
+  <textarea id="txt" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"
+    placeholder="Type or paste here, then Send. Or turn on Live to send as you type."></textarea>
+  <div class="row">
+    <button id="send">Send</button>
+    <button id="sendnl">Send + ⏎</button>
+    <button id="clear">Clear</button>
+  </div>
+  <div class="row">
+    <label><input type="checkbox" id="live"> Live (type straight through)</label>
+    <button id="cancel" style="flex:0 0 auto;padding:0 12px;display:none">Stop typing</button>
+  </div>
+</section>
+
+<section>
+  <details id="fullkb">
+    <summary>Full keyboard</summary>
+    <div class="kb" id="kb" style="margin-top:8px"></div>
+  </details>
+</section>
+
+<section>
+  <h2>Device</h2>
+  <div class="grid g4">
+    <button id="pair">Pair keyboard</button>
+    <button id="release">Release all</button>
+    <button id="forget" class="danger">Forget all</button>
+    <button id="off" class="danger">Wi-Fi off</button>
+  </div>
+  <div class="row"><button id="flash" class="danger">Flash mode (reboot into download mode)</button></div>
+</section>
+
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  let ws, statusTimer;
+
+  // ---- connection ----
+  function connect() {
+    ws = new WebSocket(`ws://${location.host}/ws`);
+    ws.onopen = () => { $('d-ws').classList.add('on'); send('s'); };
+    ws.onclose = () => { $('d-ws').classList.remove('on'); setTimeout(connect, 1000); };
+    ws.onmessage = e => { try { showStatus(JSON.parse(e.data)); } catch (_) {} };
+  }
+  function send(s) { if (ws && ws.readyState === 1) ws.send(s); }
+  statusTimer = setInterval(() => send('s'), 1500);
+  connect();
+
+  function showStatus(s) {
+    const u = $('d-usb');
+    u.className = 'dot' + (s.usb ? (s.sleep ? ' warn' : ' on') : '');
+    $('t-usb').textContent = s.usb ? (s.sleep ? 'USB (host asleep)' : 'USB') : 'USB not connected';
+    $('t-kb').textContent = s.kb.length
+      ? s.kb.map(k => k.n + (k.r ? '' : ' (connecting)')).join(', ')
+      : 'no BLE keyboards';
+    $('t-q').textContent = s.q ? `typing… ${s.q} left` : '';
+    $('cancel').style.display = s.q ? '' : 'none';
+    $('banner').style.display = s.pair ? 'block' : 'none';
+    $('banner-t').textContent = s.pk >= 0
+      ? 'Type this on the keyboard, then Enter:'
+      : 'Pairing: put your keyboard in pairing mode…';
+    $('pk').textContent = s.pk >= 0 ? String(s.pk).padStart(6, '0') : '';
+    $('spam').checked = s.spam > 0;
+    $('spam-t').textContent = s.spam > 0 ? `${s.spam}s left` : '';
+    $('spam-sec').classList.toggle('spamming', s.spam > 0);
+  }
+
+  // ---- modifiers: tap = once, tap again = lock, again = off ----
+  const modState = {}; // bit -> 0 off, 1 once, 2 lock
+  function modBits() {
+    let m = 0;
+    for (const b in modState) if (modState[b]) m |= +b;
+    return m;
+  }
+  function renderMods() {
+    document.querySelectorAll('[data-mod]').forEach(el => {
+      const st = modState[el.dataset.mod] || 0;
+      el.classList.toggle('once', st === 1);
+      el.classList.toggle('lock', st === 2);
+    });
+  }
+  function clearOnce() {
+    for (const b in modState) if (modState[b] === 1) modState[b] = 0;
+    renderMods();
+  }
+  document.addEventListener('click', e => {
+    const el = e.target.closest('[data-mod]');
+    if (!el) return;
+    const b = el.dataset.mod;
+    modState[b] = ((modState[b] || 0) + 1) % 3;
+    renderMods();
+  });
+
+  // ---- keys: press/hold/release map to HID down/up ----
+  const held = new Map(); // pointerId -> {el, m, k}
+  document.addEventListener('pointerdown', e => {
+    const el = e.target.closest('[data-k]');
+    if (!el) return;
+    e.preventDefault();
+    const m = modBits() | (+el.dataset.m || 0);
+    const k = +el.dataset.k;
+    send(`d${m} ${k}`);
+    el.classList.add('down');
+    held.set(e.pointerId, {el, m, k});
+    try { el.setPointerCapture(e.pointerId); } catch (_) {}
+  });
+  function up(e) {
+    const h = held.get(e.pointerId);
+    if (!h) return;
+    held.delete(e.pointerId);
+    send(`u${h.m} ${h.k}`);
+    h.el.classList.remove('down');
+    clearOnce();
+  }
+  ['pointerup', 'pointercancel', 'lostpointercapture'].forEach(t => document.addEventListener(t, up));
+  // Page hidden, app switched, phone locked: let go of everything.
+  const releaseAll = () => { held.clear(); document.querySelectorAll('.down').forEach(el => el.classList.remove('down')); send('r'); };
+  window.addEventListener('blur', releaseAll);
+  window.addEventListener('pagehide', releaseAll);
+  document.addEventListener('visibilitychange', () => { if (document.hidden) releaseAll(); });
+  document.addEventListener('contextmenu', e => { if (e.target.closest('[data-k]')) e.preventDefault(); });
+
+  // ---- full keyboard ----
+  const L = (label, k, w) => ({label, k, w: w || 1});
+  const letters = s => [...s].map(c => L(c, c.charCodeAt(0) - 93));
+  const rows = [
+    [L('`', 53), ...[...'1234567890'].map((c, i) => L(c, i === 9 ? 39 : 30 + i)), L('-', 45), L('=', 46), L('⌫', 42, 1.5)],
+    [L('Tab', 43, 1.5), ...letters('qwertyuiop'), L('[', 47), L(']', 48), L('\\', 49)],
+    [L('Caps', 57, 1.75), ...letters('asdfghjkl'), L(';', 51), L("'", 52), L('Enter', 40, 1.75)],
+    [L('Shift', -2, 2.25), ...letters('zxcvbnm'), L(',', 54), L('.', 55), L('/', 56), L('Shift', -2, 2.25)],
+    [L('Ctrl', -1, 1.5), L('Win', -8, 1.25), L('Alt', -4, 1.25), L('Space', 44, 6), L('Alt', -4, 1.25), L('Menu', 101, 1.25), L('Ctrl', -1, 1.5)],
+  ];
+  const kb = $('kb');
+  for (const row of rows) {
+    const r = document.createElement('div');
+    r.className = 'r';
+    for (const key of row) {
+      const b = document.createElement('button');
+      b.className = 'k';
+      b.textContent = key.label;
+      b.style.flexGrow = key.w;
+      if (key.k < 0) { b.dataset.mod = -key.k; b.classList.add('mod'); }
+      else b.dataset.k = key.k;
+      r.appendChild(b);
+    }
+    kb.appendChild(r);
+  }
+
+  // ---- text ----
+  // iOS "smart punctuation" produces characters a keyboard can't type; flatten them.
+  const norm = s => s
+    .replace(/[‘’‚‛′]/g, "'")
+    .replace(/[“”„″]/g, '"')
+    .replace(/[–—−]/g, '-')
+    .replace(/…/g, '...')
+    .replace(/[   ]/g, ' ');
+
+  const txt = $('txt');
+  let prev = '';
+  $('send').onclick = () => { if (txt.value) send('t' + norm(txt.value)); };
+  $('sendnl').onclick = () => send('t' + norm(txt.value) + '\n');
+  $('clear').onclick = () => { txt.value = ''; prev = ''; txt.focus(); };
+  $('cancel').onclick = () => send('c');
+  $('live').onchange = e => {
+    prev = txt.value;
+    $('send').disabled = $('sendnl').disabled = e.target.checked;
+    txt.focus();
+  };
+  // Live mode: diff the textarea so autocorrect/replacements become backspaces + retyping.
+  txt.addEventListener('input', () => {
+    if (!$('live').checked) return;
+    const cur = txt.value;
+    let p = 0;
+    while (p < prev.length && p < cur.length && prev[p] === cur[p]) p++;
+    const del = [...prev.slice(p)].length;
+    const add = cur.slice(p);
+    prev = cur;
+    if (del || add) send('t' + '\b'.repeat(del) + norm(add));
+  });
+
+  // ---- BIOS spam ----
+  const spamKeys = () => [...document.querySelectorAll('.chip.on')].map(c => c.dataset.sk).join(' ');
+  const sendSpam = () => send('b' + ($('spam').checked ? spamKeys() : ''));
+  $('spam').onchange = sendSpam;
+  $('chips').addEventListener('click', e => {
+    const c = e.target.closest('.chip');
+    if (!c) return;
+    c.classList.toggle('on');
+    if ($('spam').checked) sendSpam();
+  });
+
+  // ---- device ----
+  $('pair').onclick = () => send('p');
+  $('release').onclick = () => { send('r'); send('c'); send('b'); };
+  $('forget').onclick = () => { if (confirm('Forget all paired keyboards?')) send('f'); };
+  $('flash').onclick = () => { if (confirm('Reboot into download mode for flashing? The keyboard stops working until it is reflashed or replugged.')) send('F'); };
+  $('off').onclick = () => { if (confirm('Turn Wi-Fi off? Tap the device button to turn it back on.')) send('x'); };
+})();
+</script>
+</body>
+</html>
