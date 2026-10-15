@@ -14,9 +14,9 @@
 #include <sys/socket.h>
 #include <unistd.h>
 #include "esp_http_server.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_system.h"
-#include "soc/rtc_cntl_reg.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_netif.h"
@@ -97,11 +97,8 @@ static esp_err_t handle_msg(httpd_req_t *req, char *msg, size_t len)
         app_post(EV_WEB_OFF);
         break;
     case 'F':
-        ESP_LOGW(TAG, "rebooting into download mode");
         kb_web_release();
-        vTaskDelay(pdMS_TO_TICKS(200));
-        REG_WRITE(RTC_CNTL_OPTION1_REG, RTC_CNTL_FORCE_DOWNLOAD_BOOT);
-        esp_restart();
+        usb_kbd_reboot_to_download();
         break;
     case 'b': {
         uint8_t keys[KB_SPAM_MAX_KEYS];
@@ -158,8 +155,31 @@ static void on_close(httpd_handle_t hd, int fd)
     close(fd);
 }
 
+static volatile int s_sta, s_joins, s_leaves, s_last_reason;
+
+static void on_wifi_event(void *arg, esp_event_base_t base, int32_t id, void *data)
+{
+    if (base == WIFI_EVENT && id == WIFI_EVENT_AP_STACONNECTED) {
+        s_sta++;
+        s_joins++;
+    } else if (base == WIFI_EVENT && id == WIFI_EVENT_AP_STADISCONNECTED) {
+        wifi_event_ap_stadisconnected_t *e = data;
+        if (s_sta > 0) s_sta--;
+        s_leaves++;
+        s_last_reason = e->reason;
+    } else if (base == WIFI_EVENT && id == WIFI_EVENT_AP_STOP) {
+        s_sta = 0;
+    }
+}
+
+int web_sta_count(void) { return s_sta; }
+int web_join_count(void) { return s_joins; }
+int web_leave_count(void) { return s_leaves; }
+int web_last_leave_reason(void) { return s_last_reason; }
+
 void web_init(void)
 {
+    ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, on_wifi_event, NULL));
     esp_netif_create_default_wifi_ap();
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
@@ -186,6 +206,9 @@ void web_start(void)
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &wc));
     ESP_ERROR_CHECK(esp_wifi_start());
+    /* Units of 0.25dBm. Full power (~20dBm) draws current spikes that can brown
+     * out small USB sticks; 13dBm is plenty for a phone in the same room. */
+    esp_wifi_set_max_tx_power(52);
 
     httpd_config_t hc = HTTPD_DEFAULT_CONFIG();
     hc.close_fn = on_close;
@@ -203,6 +226,8 @@ void web_start(void)
     httpd_register_uri_handler(s_httpd, &ws_uri);
 
     touch();
+    ESP_LOGI(TAG, "free internal heap after Wi-Fi start: %u",
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
     ESP_LOGI(TAG, "web UI on: join Wi-Fi '%s', open http://192.168.4.1", CONFIG_ESPKB_AP_SSID);
 }
 

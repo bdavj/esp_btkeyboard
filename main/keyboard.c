@@ -251,6 +251,6 @@ void kb_init(void)
 {
     s_mx = xSemaphoreCreateMutex();
     s_type_buf = xStreamBufferCreate(TYPE_BUF_SIZE, 1);
-    xTaskCreate(type_task, "typer", 3072, NULL, 5, NULL);
-    xTaskCreate(spam_task, "spam", 2560, NULL, 5, &s_spam_task);
+    xTaskCreate(type_task, "typer", 4096, NULL, 5, NULL);
+    xTaskCreate(spam_task, "spam", 4096, NULL, 5, &s_spam_task);
 }

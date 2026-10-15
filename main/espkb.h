@@ -9,18 +9,21 @@
 typedef enum {
     EV_BTN_TAP,
     EV_BTN_LONG,
+    EV_WEB_ON,
     EV_WEB_OFF,
     EV_PAIR,
     EV_KB_CONNECTED,
 } app_ev_t;
 
 void app_post(app_ev_t ev);
+const char *app_boot_report(void);
 
 /* ---- USB HID boot keyboard (usb_kbd.c) ---- */
 void usb_kbd_init(void);
 void usb_kbd_send(const uint8_t report[8]);
 bool usb_kbd_mounted(void);
 bool usb_kbd_suspended(void);
+void usb_kbd_reboot_to_download(void);
 
 /* ---- report merging + text typing (keyboard.c) ----
  * Every input (each BLE keyboard, web keys, web typing) is a "source" with its
@@ -76,6 +79,10 @@ void web_start(void);
 void web_stop(void);
 bool web_running(void);
 int64_t web_last_activity_us(void);
+int web_sta_count(void);
+int web_join_count(void);
+int web_leave_count(void);
+int web_last_leave_reason(void);
 
 /* ---- status LED (led.c) ---- */
 void led_init(void);

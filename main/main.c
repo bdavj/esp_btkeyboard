@@ -4,9 +4,15 @@
  * Button tap:      toggle Wi-Fi AP + web UI (LED blue while on)
  * Button hold 3s:  pair a new BLE keyboard for 60s (LED blinks magenta) */
 
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include "driver/gpio.h"
 #include "esp_event.h"
+#include "esp_core_dump.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_system.h"
 #include "esp_netif.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -56,6 +62,61 @@ static void button_task(void *arg)
     }
 }
 
+static const char *reset_reason_str(esp_reset_reason_t r)
+{
+    switch (r) {
+    case ESP_RST_POWERON: return "power on";
+    case ESP_RST_SW: return "software restart";
+    case ESP_RST_PANIC: return "CRASH (panic)";
+    case ESP_RST_INT_WDT: return "CRASH (interrupt watchdog)";
+    case ESP_RST_TASK_WDT: return "CRASH (task watchdog)";
+    case ESP_RST_WDT: return "CRASH (other watchdog)";
+    case ESP_RST_BROWNOUT: return "BROWNOUT (supply voltage dipped)";
+    case ESP_RST_USB: return "USB reset";
+    case ESP_RST_DEEPSLEEP: return "deep sleep wake";
+    default: return "other";
+    }
+}
+
+/* The log goes to USB serial, which the host only opens a moment after we
+ * enumerate, so report why we last reset a few seconds after boot. */
+static char s_boot_report[320] = "boot report not ready\r\n";
+
+const char *app_boot_report(void)
+{
+    return s_boot_report;
+}
+
+static void boot_report_task(void *arg)
+{
+    vTaskDelay(pdMS_TO_TICKS(4000));
+    esp_reset_reason_t r = esp_reset_reason();
+    ESP_LOGW(TAG, "last reset: %s (%d)", reset_reason_str(r), r);
+    int n = snprintf(s_boot_report, sizeof(s_boot_report), "last_reset=%s\r\n", reset_reason_str(r));
+    ESP_LOGI(TAG, "free internal heap %u, largest block %u, min ever %u",
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL));
+
+    esp_core_dump_summary_t *sum = malloc(sizeof(*sum));
+    if (sum && esp_core_dump_image_check() == ESP_OK && esp_core_dump_get_summary(sum) == ESP_OK) {
+        ESP_LOGE(TAG, "previous crash in task '%s' at PC 0x%08lx, cause %lu, vaddr 0x%08lx", sum->exc_task,
+                 (unsigned long)sum->exc_pc, (unsigned long)sum->ex_info.exc_cause,
+                 (unsigned long)sum->ex_info.exc_vaddr);
+        char bt[16 * 11 + 1] = {0};
+        for (int i = 0; i < sum->exc_bt_info.depth && i < 16; i++) {
+            sprintf(bt + strlen(bt), " 0x%08lx", (unsigned long)sum->exc_bt_info.bt[i]);
+        }
+        ESP_LOGE(TAG, "backtrace:%s%s", bt, sum->exc_bt_info.corrupted ? " (corrupted)" : "");
+        snprintf(s_boot_report + n, sizeof(s_boot_report) - n, "crash task=%s pc=0x%08lx cause=%lu vaddr=0x%08lx bt=%s\r\n",
+                 sum->exc_task, (unsigned long)sum->exc_pc, (unsigned long)sum->ex_info.exc_cause,
+                 (unsigned long)sum->ex_info.exc_vaddr, bt);
+        esp_core_dump_image_erase();
+    }
+    free(sum);
+    vTaskDelete(NULL);
+}
+
 static void update_led(int64_t now, int64_t flash_until)
 {
     if (ble_host_pairing()) {
@@ -87,7 +148,8 @@ void app_main(void)
     usb_kbd_init();
     ble_host_init();
     web_init();
-    xTaskCreate(button_task, "button", 2048, NULL, 5, NULL);
+    xTaskCreate(button_task, "button", 4096, NULL, 5, NULL);
+    xTaskCreate(boot_report_task, "boot_report", 4096, NULL, 3, NULL);
 
     ESP_LOGI(TAG, "espkb running. Tap button for web UI, hold %ds to pair.", LONG_PRESS_MS / 1000);
 
@@ -102,6 +164,9 @@ void app_main(void)
                 } else {
                     web_start();
                 }
+                break;
+            case EV_WEB_ON:
+                web_start();
                 break;
             case EV_WEB_OFF:
                 web_stop();

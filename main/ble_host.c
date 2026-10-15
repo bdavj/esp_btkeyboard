@@ -472,6 +472,10 @@ static void host_task(void *param)
 void ble_host_init(void)
 {
     s_mx = xSemaphoreCreateMutex();
+#if !CONFIG_ESPKB_BLE_ENABLE
+    ESP_LOGW(TAG, "Bluetooth disabled in config");
+    return;
+#endif
     ESP_ERROR_CHECK(nimble_port_init());
 
     ble_hs_cfg.sync_cb = on_sync;
@@ -495,6 +499,7 @@ void ble_host_init(void)
 
 void ble_host_start_pairing(int seconds)
 {
+    if (!s_synced) return;
     s_passkey = -1;
     s_pair_until = esp_timer_get_time() + (int64_t)seconds * 1000000;
     ESP_LOGI(TAG, "pairing mode for %ds - put your keyboard into pairing mode", seconds);
@@ -504,6 +509,7 @@ void ble_host_start_pairing(int seconds)
 void ble_host_set_wifi_active(bool on)
 {
     s_wifi_active = on;
+    if (!s_synced) return;
     if (ble_gap_disc_active()) {
         ble_gap_disc_cancel();
         start_scan();
@@ -512,6 +518,7 @@ void ble_host_set_wifi_active(bool on)
 
 void ble_host_forget_all(void)
 {
+    if (!s_synced) return;
     for (int i = 0; i < NSLOTS; i++) {
         if (s_slots[i].used) ble_gap_terminate(s_slots[i].conn, BLE_ERR_REM_USER_CONN_TERM);
     }
