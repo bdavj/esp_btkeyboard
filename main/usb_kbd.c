@@ -78,6 +78,7 @@ static const char *s_str_desc[] = {
 };
 
 static QueueHandle_t s_txq;
+static TaskHandle_t s_tx_task;
 static volatile uint32_t s_n_queued, s_n_sent, s_n_refused, s_n_suspended, s_n_qfull;
 
 uint8_t const *tud_hid_descriptor_report_cb(uint8_t instance)
@@ -109,42 +110,71 @@ static bool has_keys(const uint8_t r[8])
     return false;
 }
 
+/* tx_task sleeps until something changes: a report is queued, the host has
+ * collected the previous report (tud_hid_report_complete_cb), or the bus is
+ * mounted/resumed. The next report goes out the moment the IN endpoint is
+ * free, so typing runs at the host's poll rate instead of a fixed delay. */
+#define TX_RETRY_MS      50
+#define TX_QUEUE_LEN     32
+#define TX_QUEUE_WAIT_MS 500
+
+static void tx_notify(void)
+{
+    if (s_tx_task) xTaskNotifyGive(s_tx_task);
+}
+
+void tud_hid_report_complete_cb(uint8_t instance, uint8_t const *report, uint16_t len)
+{
+    tx_notify();
+}
+
+void tud_mount_cb(void)
+{
+    tx_notify();
+}
+
+void tud_resume_cb(void)
+{
+    tx_notify();
+}
+
 static void tx_task(void *arg)
 {
-    /* Reports normally go out in order, one per queue item. If one can't be
-     * delivered (host asleep, endpoint busy, cable yanked), we keep the latest
-     * desired state and retry until the host has it, so a key never stays
-     * stuck down. Intermediate states may be skipped in that case. */
+    /* Reports go out in order, one per queue item. If one can't be delivered
+     * (host asleep, endpoint busy, cable yanked), we keep the latest desired
+     * state and retry until the host has it, so a key never stays stuck down.
+     * Intermediate states may be skipped in that case. */
     uint8_t latest[8] = {0};
     bool dirty = false, woke = false;
     for (;;) {
-        uint8_t r[8];
-        if (xQueueReceive(s_txq, r, pdMS_TO_TICKS(dirty ? 20 : 1000)) == pdTRUE) {
-            memcpy(latest, r, sizeof(latest));
+        if (!dirty && xQueueReceive(s_txq, latest, 0) == pdTRUE) {
             dirty = true;
             s_n_queued++;
         }
-        if (!dirty || !tud_mounted()) continue;
-
-        if (tud_suspended()) {
-            s_n_suspended++;
-            /* Only a key press should wake the host; a release waits for resume. */
-            if (has_keys(latest) && !woke) {
-                tud_remote_wakeup();
-                woke = true;
+        if (dirty && tud_mounted()) {
+            if (tud_suspended()) {
+                s_n_suspended++;
+                /* Only a key press should wake the host; a release waits for resume. */
+                if (has_keys(latest) && !woke) {
+                    tud_remote_wakeup();
+                    woke = true;
+                }
+            } else {
+                woke = false;
+                if (tud_hid_ready()) {
+                    if (tud_hid_keyboard_report(0, latest[0], &latest[2])) {
+                        dirty = false;
+                        s_n_sent++;
+                        continue; /* pull the next report; it waits for the completion */
+                    }
+                    s_n_refused++;
+                    ESP_LOGW(TAG, "report not accepted, retrying");
+                }
             }
-            continue;
         }
-        woke = false;
-
-        for (int i = 0; i < 50 && !tud_hid_ready(); i++) vTaskDelay(pdMS_TO_TICKS(1));
-        if (tud_hid_keyboard_report(0, latest[0], &latest[2])) {
-            dirty = false;
-            s_n_sent++;
-        } else {
-            s_n_refused++;
-            ESP_LOGW(TAG, "report not accepted, retrying");
-        }
+        /* Wake on queue/completion/bus events; while a report is pending also
+         * poll occasionally in case an event was missed. */
+        ulTaskNotifyTake(pdTRUE, dirty ? pdMS_TO_TICKS(TX_RETRY_MS) : portMAX_DELAY);
     }
 }
 
@@ -212,7 +242,7 @@ static void on_rx(int itf, cdcacm_event_t *ev)
 
 void usb_kbd_init(void)
 {
-    s_txq = xQueueCreate(128, 8);
+    s_txq = xQueueCreate(TX_QUEUE_LEN, 8);
 
     const tinyusb_config_t cfg = {
         .device_descriptor = &s_dev_desc,
@@ -234,13 +264,18 @@ void usb_kbd_init(void)
     esp_tusb_init_console(TINYUSB_CDC_ACM_0);
 #endif
 #endif
-    xTaskCreate(tx_task, "usb_tx", 4096, NULL, 6, NULL);
+    xTaskCreate(tx_task, "usb_tx", 4096, NULL, 6, &s_tx_task);
     ESP_LOGI(TAG, "USB HID keyboard ready");
 }
 
 void usb_kbd_send(const uint8_t report[8])
 {
-    if (xQueueSend(s_txq, report, pdMS_TO_TICKS(100)) != pdTRUE) {
+    /* The queue drains at the host's poll rate (1-8 ms per report), so a wait
+     * here only means a burst outran the host; keep the queue short so that
+     * cancelling text typing doesn't leave much already queued. */
+    if (xQueueSend(s_txq, report, pdMS_TO_TICKS(TX_QUEUE_WAIT_MS)) == pdTRUE) {
+        tx_notify();
+    } else {
         s_n_qfull++;
         ESP_LOGW(TAG, "tx queue full");
     }

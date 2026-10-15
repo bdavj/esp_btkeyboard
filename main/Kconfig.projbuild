@@ -65,8 +65,12 @@ menu "espkb"
     endchoice
 
     config ESPKB_TYPE_DELAY_MS
-        int "Delay between key events when typing text (ms)"
-        default 8
+        int "Extra delay between key events when typing text (ms, 0 = host-paced)"
+        default 0
+        help
+            Typed text is sent one report per key press/release, each as soon
+            as the host has collected the previous one. Set a delay (rounded up
+            to a FreeRTOS tick, 10 ms by default) only if a host drops keys.
 
     config ESPKB_AP_SSID
         string "Wi-Fi AP SSID"

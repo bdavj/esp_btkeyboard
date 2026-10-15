@@ -303,11 +303,12 @@ phone ──WebSocket──▶ web.c ──keys / text──────┘     
 
 ## Limitations / ideas
 
-- Typing from the phone is paced by how often the host collects USB reports.
-  Through some hubs/docks that's slower than the 1 ms the device asks for, so
-  a key release can need a retry and text comes out at maybe 10 characters a
-  second. Making the USB send path event-driven (next report on completion of
-  the previous one) would fix that.
+- Typing from the phone is paced by how often the host collects USB reports:
+  each key press and release goes out as soon as the host has taken the
+  previous one (`tud_hid_report_complete_cb`). That's 1 ms on a direct port,
+  up to 8 ms through some hubs/docks, so expect 60-500 characters a second.
+  If a host drops characters, set an extra delay with menuconfig → espkb →
+  "Extra delay between key events".
 
 - **Boot protocol** means only standard keys come through. Media and consumer
   keys (volume, brightness) are dropped. Supporting them would need report-map

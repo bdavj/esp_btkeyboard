@@ -117,13 +117,25 @@ void kb_web_release(void)
 
 /* ---- text typing ---- */
 
+/* Press and release are separate USB reports, delivered in order and paced
+ * by the host's polling (usb_kbd.c), so no delay is needed between them. An
+ * optional extra delay (rounded up to a tick) is there for hosts that want
+ * longer presses. */
+static void type_pause(void)
+{
+    if (CONFIG_ESPKB_TYPE_DELAY_MS > 0) {
+        TickType_t t = pdMS_TO_TICKS(CONFIG_ESPKB_TYPE_DELAY_MS);
+        vTaskDelay(t ? t : 1);
+    }
+}
+
 static void tap(uint8_t mods, uint8_t key)
 {
     uint8_t keys[6] = {key};
     kb_set_source(KB_SRC_TYPE, mods, keys);
-    vTaskDelay(pdMS_TO_TICKS(CONFIG_ESPKB_TYPE_DELAY_MS));
+    type_pause();
     kb_set_source(KB_SRC_TYPE, 0, NULL);
-    vTaskDelay(pdMS_TO_TICKS(CONFIG_ESPKB_TYPE_DELAY_MS));
+    type_pause();
 }
 
 static void type_task(void *arg)
