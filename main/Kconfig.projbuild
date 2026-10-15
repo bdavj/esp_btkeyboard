@@ -1,0 +1,90 @@
+menu "espkb"
+
+    config ESPKB_BUTTON_GPIO
+        int "Button GPIO (tap: web UI on/off, hold 3s: pair keyboard)"
+        default 41
+        help
+            AtomS3U: 41. ESP32-S3-DevKitC: 0 (BOOT button).
+
+    config ESPKB_BUTTON_ACTIVE_LOW
+        bool "Button is active low"
+        default y
+
+    choice ESPKB_LED_TYPE
+        prompt "Status LED type"
+        default ESPKB_LED_WS2812
+
+        config ESPKB_LED_WS2812
+            bool "WS2812 / SK6812 RGB"
+        config ESPKB_LED_GPIO_PLAIN
+            bool "Plain GPIO LED (active high)"
+        config ESPKB_LED_NONE
+            bool "None"
+    endchoice
+
+    config ESPKB_LED_GPIO
+        int "LED GPIO"
+        default 35
+        depends on !ESPKB_LED_NONE
+        help
+            AtomS3U: 35. ESP32-S3-DevKitC-1: 48 (v1.0) or 38 (v1.1).
+
+    config ESPKB_LED_BRIGHTNESS
+        int "RGB LED brightness (1-255)"
+        range 1 255
+        default 40
+        depends on ESPKB_LED_WS2812
+
+    config ESPKB_MAX_KEYBOARDS
+        int "Max simultaneous BLE keyboards"
+        range 1 3
+        default 2
+
+    config ESPKB_BLE_PASSKEY
+        bool "Support passkey pairing (passkey is shown in the web UI)"
+        default y
+        help
+            If enabled we advertise DisplayOnly IO capability, so keyboards that
+            want it will ask you to type a 6-digit code (shown on the web page and
+            serial log) followed by Enter. If disabled, "Just Works" pairing is used.
+
+    choice ESPKB_LAYOUT
+        prompt "Host keyboard layout (for typing text from the web UI)"
+        default ESPKB_LAYOUT_US
+
+        config ESPKB_LAYOUT_US
+            bool "US"
+        config ESPKB_LAYOUT_UK
+            bool "UK"
+    endchoice
+
+    config ESPKB_TYPE_DELAY_MS
+        int "Delay between key events when typing text (ms)"
+        default 8
+
+    config ESPKB_AP_SSID
+        string "Wi-Fi AP SSID"
+        default "espkb"
+
+    config ESPKB_AP_PASSWORD
+        string "Wi-Fi AP password (8+ chars, empty = open network - not recommended)"
+        default "espkb1234"
+
+    config ESPKB_AP_CHANNEL
+        int "Wi-Fi AP channel"
+        range 1 13
+        default 6
+
+    config ESPKB_WEB_TIMEOUT_MIN
+        int "Turn Wi-Fi off after N minutes with no page open (0 = never)"
+        default 15
+
+    config ESPKB_USB_VID
+        hex "USB VID"
+        default 0x303A
+
+    config ESPKB_USB_PID
+        hex "USB PID"
+        default 0x8166
+
+endmenu
