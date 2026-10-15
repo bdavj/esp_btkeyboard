@@ -22,6 +22,8 @@
 #include "esp_netif.h"
 #include "esp_timer.h"
 #include "esp_wifi.h"
+#include "esp_ota_ops.h"
+#include "esp_app_desc.h"
 #include "espkb.h"
 
 static const char *TAG = "web";
@@ -49,14 +51,75 @@ static esp_err_t index_handler(httpd_req_t *req)
     return httpd_resp_send(req, index_html_start, index_html_end - index_html_start - 1);
 }
 
+/* POST /update with the raw espkb.bin as the body. Writes it to the spare app
+ * slot, verifies it, makes it the boot slot and reboots. */
+static esp_err_t update_handler(httpd_req_t *req)
+{
+    touch();
+    const esp_partition_t *part = esp_ota_get_next_update_partition(NULL);
+    if (!part) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no spare app partition");
+        return ESP_FAIL;
+    }
+    if (req->content_len < 0x20000 || req->content_len > part->size) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "that doesn't look like a firmware image");
+        return ESP_FAIL;
+    }
+    kb_web_release();
+    kb_type_cancel();
+    kb_spam_start(NULL, 0, 0);
+
+    esp_ota_handle_t ota = 0;
+    esp_err_t err = esp_ota_begin(part, req->content_len, &ota);
+    char *buf = err == ESP_OK ? malloc(4096) : NULL;
+    if (!buf) err = err == ESP_OK ? ESP_ERR_NO_MEM : err;
+
+    size_t left = req->content_len;
+    while (err == ESP_OK && left > 0) {
+        int n = httpd_req_recv(req, buf, left < 4096 ? left : 4096);
+        if (n == HTTPD_SOCK_ERR_TIMEOUT) continue;
+        if (n <= 0) {
+            err = ESP_FAIL;
+            break;
+        }
+        err = esp_ota_write(ota, buf, n);
+        left -= n;
+    }
+    free(buf);
+    if (err == ESP_OK) {
+        err = esp_ota_end(ota); /* validates the image */
+    } else if (ota) {
+        esp_ota_abort(ota);
+    }
+
+    /* Only accept images of this project, so a stray .bin can't replace us. */
+    esp_app_desc_t desc;
+    if (err == ESP_OK && (esp_ota_get_partition_description(part, &desc) != ESP_OK ||
+                          strcmp(desc.project_name, "espkb") != 0)) {
+        err = ESP_ERR_INVALID_ARG;
+    }
+    if (err == ESP_OK) err = esp_ota_set_boot_partition(part);
+
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "OTA failed: %s", esp_err_to_name(err));
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, esp_err_to_name(err));
+        return ESP_FAIL;
+    }
+    ESP_LOGW(TAG, "OTA ok: %s %s in %s, rebooting", desc.project_name, desc.version, part->label);
+    httpd_resp_set_type(req, "text/plain");
+    httpd_resp_sendstr(req, "OK: update written, rebooting. Tap the button to turn Wi-Fi back on.\n");
+    app_post(EV_REBOOT);
+    return ESP_OK;
+}
+
 static esp_err_t send_status(httpd_req_t *req)
 {
     ble_status_t st;
     ble_host_status(&st);
 
     char buf[512];
-    int n = snprintf(buf, sizeof(buf), "{\"usb\":%d,\"sleep\":%d,\"pair\":%d,\"pk\":%d,\"q\":%u,\"spam\":%d,\"kb\":[",
-                     usb_kbd_mounted(), usb_kbd_suspended(), st.pairing, st.passkey,
+    int n = snprintf(buf, sizeof(buf), "{\"ver\":\"%s\",\"usb\":%d,\"sleep\":%d,\"pair\":%d,\"pk\":%d,\"q\":%u,\"spam\":%d,\"kb\":[",
+                     esp_app_get_description()->version, usb_kbd_mounted(), usb_kbd_suspended(), st.pairing, st.passkey,
                      (unsigned)kb_type_pending(), kb_spam_remaining());
     for (int i = 0; i < st.count && n < sizeof(buf) - 64; i++) {
         n += snprintf(buf + n, sizeof(buf) - n, "%s{\"n\":\"%s\",\"r\":%d}", i ? "," : "", st.kb[i].name,
@@ -222,8 +285,10 @@ void web_start(void)
     static const httpd_uri_t index_uri = {.uri = "/", .method = HTTP_GET, .handler = index_handler};
     static const httpd_uri_t ws_uri = {
         .uri = "/ws", .method = HTTP_GET, .handler = ws_handler, .is_websocket = true};
+    static const httpd_uri_t update_uri = {.uri = "/update", .method = HTTP_POST, .handler = update_handler};
     httpd_register_uri_handler(s_httpd, &index_uri);
     httpd_register_uri_handler(s_httpd, &ws_uri);
+    httpd_register_uri_handler(s_httpd, &update_uri);
 
     touch();
     ESP_LOGI(TAG, "free internal heap after Wi-Fi start: %u",

@@ -13,6 +13,7 @@ typedef enum {
     EV_WEB_OFF,
     EV_PAIR,
     EV_KB_CONNECTED,
+    EV_REBOOT, /* after an OTA update: short delay so the HTTP reply gets out */
 } app_ev_t;
 
 void app_post(app_ev_t ev);

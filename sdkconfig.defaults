@@ -4,6 +4,10 @@ CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 
+# OTA: a new image boots in "pending" state and must mark itself valid (main.c
+# does so after a healthy minute); otherwise the bootloader rolls back.
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+
 # Save crash info to flash; it's summarised in the log on the next boot
 CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
 CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF=y

@@ -141,6 +141,16 @@ details summary::before{content:"â–¸ "}details[open] summary::before{content:"â–
 </section>
 
 <section>
+  <h2>Firmware</h2>
+  <div class="row" style="margin-top:0">
+    <input type="file" id="fw" accept=".bin,application/octet-stream" style="flex:1;min-width:0;color:var(--dim);font-size:13px">
+    <button id="fwup" style="flex:0 0 auto;padding:0 14px">Update</button>
+  </div>
+  <progress id="fwprog" value="0" max="100" style="width:100%;display:none;margin-top:6px"></progress>
+  <div id="fwmsg" class="small" style="margin-top:6px">Running: <span id="ver">?</span></div>
+</section>
+
+<section>
   <h2>Device</h2>
   <div class="grid g4">
     <button id="pair">Pair keyboard</button>
@@ -181,6 +191,7 @@ details summary::before{content:"â–¸ "}details[open] summary::before{content:"â–
       ? 'Type this on the keyboard, then Enter:'
       : 'Pairing: put your keyboard in pairing modeâ€¦';
     $('pk').textContent = s.pk >= 0 ? String(s.pk).padStart(6, '0') : '';
+    if (s.ver) $('ver').textContent = s.ver;
     $('spam').checked = s.spam > 0;
     $('spam-t').textContent = s.spam > 0 ? `${s.spam}s left` : '';
     $('spam-sec').classList.toggle('spamming', s.spam > 0);
@@ -309,6 +320,27 @@ details summary::before{content:"â–¸ "}details[open] summary::before{content:"â–
     c.classList.toggle('on');
     if ($('spam').checked) sendSpam();
   });
+
+  // ---- firmware update ----
+  $('fwup').onclick = () => {
+    const f = $('fw').files[0];
+    if (!f) { $('fwmsg').textContent = 'Pick the espkb.bin first.'; return; }
+    if (!confirm(`Flash ${f.name} (${(f.size / 1024).toFixed(0)} KB)? The device reboots afterwards.`)) return;
+    const x = new XMLHttpRequest();
+    const prog = $('fwprog'), msg = $('fwmsg');
+    prog.style.display = ''; prog.value = 0;
+    msg.textContent = 'Uploadingâ€¦';
+    x.upload.onprogress = e => { if (e.lengthComputable) prog.value = 100 * e.loaded / e.total; };
+    x.onload = () => {
+      prog.style.display = 'none';
+      msg.textContent = x.status === 200
+        ? 'Written. Rebooting: Wi-Fi goes off, tap the device button to bring it back, then rejoin and reload.'
+        : `Update failed: ${x.responseText || x.status}`;
+    };
+    x.onerror = () => { prog.style.display = 'none'; msg.textContent = 'Upload failed (connection dropped).'; };
+    x.open('POST', '/update');
+    x.send(f);
+  };
 
   // ---- device ----
   $('pair').onclick = () => send('p');

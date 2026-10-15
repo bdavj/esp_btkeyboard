@@ -194,7 +194,9 @@ idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.devkitc" bui
 ### Flashing
 
 Once this firmware runs, the board shows up as a keyboard plus a small serial
-port, not as a flashable device. To flash, put it into download mode first.
+port, not as a flashable device. For updates, use [OTA](#updating-over-wi-fi-ota)
+instead. For the first flash (or after changing the partition table), put it
+into download mode first.
 The reliable way, especially through a dock, is a **power-up with the button
 held**:
 
@@ -228,6 +230,32 @@ After flashing, the board stays in download mode: **unplug and replug it**
 On macOS, Docker can't reach USB serial ports, which is why the flash step runs
 outside the container.
 
+### Updating over Wi-Fi (OTA)
+
+After the first flash, updates go over Wi-Fi, no button needed. The flash has
+two app slots: an update is written to the spare one, verified, then booted.
+
+1. Build as usual. The image is `build/espkb.bin`.
+2. Turn the web UI on (tap the button) and join the `espkb` network.
+3. Either use the **Firmware** section of the page (pick the `.bin`, tap
+   Update), or from a computer on that network:
+
+   ```bash
+   curl -X POST --data-binary @build/espkb.bin http://192.168.4.1/update
+   ```
+
+4. The device reboots into the new image. Wi-Fi is off after a reboot, so tap
+   the button again to get the page back.
+
+Safety nets: only images whose project name is `espkb` are accepted, the image
+is checksum-verified before it's made bootable, and a freshly booted update is
+"pending" until it has run cleanly for a bit (USB up, then 5 seconds; or a
+minute with no host). If it crashes before then, the bootloader rolls back to
+the previous slot. `s` on the serial port shows `ver=` (git describe) and
+`slot=` so you can see what's running.
+
+Changing `partitions.csv` or the bootloader config needs a wired flash.
+
 ### Serial port: status and commands
 
 While running, the board exposes a USB serial port (`/dev/cu.usbmodem*` on
@@ -235,7 +263,7 @@ macOS, 115200 baud). Single characters are commands:
 
 | Key | Does |
 |---|---|
-| `s` | Status: uptime, USB, Wi-Fi joins/drops, keyboards, HID delivery counters, BLE detail, last reset and crash summary |
+| `s` | Status: version and boot slot, uptime, USB, Wi-Fi joins/drops, keyboards, HID delivery counters, BLE detail, last reset and crash summary |
 | `w` / `x` | Wi-Fi on / off |
 | `p` | Pairing mode |
 | `B` | Reboot into download mode |
@@ -265,7 +293,7 @@ If the board crash-loops so fast it never shows up on USB, put it in download
 mode and pull the dump out with esptool (offset from `partitions.csv`):
 
 ```bash
-cd build && python3 -m esptool --chip esp32s3 -p /dev/cu.usbmodem* read_flash 0x1d0000 0x10000 coredump.bin
+cd build && python3 -m esptool --chip esp32s3 -p /dev/cu.usbmodem* read_flash 0x320000 0x10000 coredump.bin
 ```
 
 ```bash

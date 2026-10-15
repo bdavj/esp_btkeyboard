@@ -19,6 +19,7 @@
 #include "freertos/queue.h"
 #include "freertos/task.h"
 #include "nvs_flash.h"
+#include "esp_ota_ops.h"
 #include "espkb.h"
 
 static const char *TAG = "main";
@@ -117,6 +118,22 @@ static void boot_report_task(void *arg)
     vTaskDelete(NULL);
 }
 
+/* After an OTA update the new image is only "pending": confirm it once it has
+ * clearly booted fine (USB came up, or it simply ran for a minute with the
+ * host off). If we crash before this, the bootloader reverts to the old one. */
+static void confirm_image_task(void *arg)
+{
+    const esp_partition_t *running = esp_ota_get_running_partition();
+    esp_ota_img_states_t state;
+    if (esp_ota_get_state_partition(running, &state) == ESP_OK && state == ESP_OTA_IMG_PENDING_VERIFY) {
+        for (int i = 0; i < 60 && !usb_kbd_mounted(); i++) vTaskDelay(pdMS_TO_TICKS(1000));
+        vTaskDelay(pdMS_TO_TICKS(5000));
+        esp_ota_mark_app_valid_cancel_rollback();
+        ESP_LOGI(TAG, "OTA image confirmed as good");
+    }
+    vTaskDelete(NULL);
+}
+
 static void update_led(int64_t now, int64_t flash_until)
 {
     if (ble_host_pairing()) {
@@ -150,6 +167,7 @@ void app_main(void)
     web_init();
     xTaskCreate(button_task, "button", 4096, NULL, 5, NULL);
     xTaskCreate(boot_report_task, "boot_report", 4096, NULL, 3, NULL);
+    xTaskCreate(confirm_image_task, "ota_confirm", 4096, NULL, 3, NULL);
 
     ESP_LOGI(TAG, "espkb running. Tap button for web UI, hold %ds to pair.", LONG_PRESS_MS / 1000);
 
@@ -174,6 +192,10 @@ void app_main(void)
             case EV_BTN_LONG:
             case EV_PAIR:
                 ble_host_start_pairing(PAIR_SECONDS);
+                break;
+            case EV_REBOOT:
+                vTaskDelay(pdMS_TO_TICKS(1000));
+                esp_restart();
                 break;
             case EV_KB_CONNECTED:
                 flash_until = esp_timer_get_time() + 300000;

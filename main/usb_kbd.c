@@ -18,6 +18,8 @@
 #include "class/hid/hid_device.h"
 #include "esp_system.h"
 #include "esp_timer.h"
+#include "esp_ota_ops.h"
+#include "esp_app_desc.h"
 #include "soc/rtc_cntl_reg.h"
 #if CONFIG_ESPKB_USB_LOG
 #include "tusb_cdc_acm.h"
@@ -236,7 +238,8 @@ static void on_rx(int itf, cdcacm_event_t *ev)
             char line[160];
             ble_status_t st;
             ble_host_status(&st);
-            snprintf(line, sizeof(line), "up=%llus usb=%d wifi=%d sta=%d joins=%d leaves=%d last_leave_reason=%d kb=%d heap=%u\r\n",
+            snprintf(line, sizeof(line), "ver=%s slot=%s up=%llus usb=%d wifi=%d sta=%d joins=%d leaves=%d last_leave_reason=%d kb=%d heap=%u\r\n",
+                     esp_app_get_description()->version, esp_ota_get_running_partition()->label,
                      (unsigned long long)(esp_timer_get_time() / 1000000), tud_mounted(), web_running(),
                      web_sta_count(), web_join_count(), web_leave_count(), web_last_leave_reason(), st.count,
                      (unsigned)esp_get_free_heap_size());

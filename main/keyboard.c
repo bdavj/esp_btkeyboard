@@ -245,7 +245,7 @@ void kb_spam_start(const uint8_t *keys, int n, int seconds)
 {
     if (n > KB_SPAM_MAX_KEYS) n = KB_SPAM_MAX_KEYS;
     s_spam_n = 0; /* pause the task while the key list changes */
-    memcpy(s_spam_keys, keys, n);
+    if (keys && n) memcpy(s_spam_keys, keys, n);
     s_spam_until = esp_timer_get_time() + (int64_t)seconds * 1000000;
     s_spam_n = n;
     if (n) ESP_LOGI(TAG, "BIOS spam on: %d keys for %ds", n, seconds);
