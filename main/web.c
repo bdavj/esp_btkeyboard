@@ -182,6 +182,7 @@ void web_start(void)
     strlcpy((char *)wc.ap.password, CONFIG_ESPKB_AP_PASSWORD, sizeof(wc.ap.password));
     if (strlen(CONFIG_ESPKB_AP_PASSWORD) < 8) wc.ap.authmode = WIFI_AUTH_OPEN;
 
+    ble_host_set_wifi_active(true);
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &wc));
     ESP_ERROR_CHECK(esp_wifi_start());
@@ -212,6 +213,7 @@ void web_stop(void)
     s_httpd = NULL;
     s_ws_fd = -1;
     esp_wifi_stop();
+    ble_host_set_wifi_active(false);
     kb_web_release();
     ESP_LOGI(TAG, "web UI off");
 }

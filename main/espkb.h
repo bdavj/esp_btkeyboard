@@ -65,6 +65,9 @@ void ble_host_start_pairing(int seconds);
 bool ble_host_pairing(void);
 void ble_host_forget_all(void);
 void ble_host_set_leds(uint8_t leds);
+/* Wi-Fi and BLE share one radio: scan much less while the AP is up so phones
+ * can complete the WPA2 handshake. */
+void ble_host_set_wifi_active(bool on);
 void ble_host_status(ble_status_t *out);
 
 /* ---- Wi-Fi AP + web UI (web.c) ---- */

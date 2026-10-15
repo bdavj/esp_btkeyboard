@@ -68,6 +68,7 @@ static bool s_pending_fresh;
 static int64_t s_pair_until;
 static volatile int s_passkey = -1;
 static volatile uint8_t s_leds;
+static volatile bool s_wifi_active;
 
 static int gap_event(struct ble_gap_event *ev, void *arg);
 static void start_scan(void);
@@ -433,9 +434,11 @@ static void start_scan(void)
 {
     if (!s_synced || s_connecting || ble_gap_disc_active() || free_slot() < 0) return;
 
+    /* Units of 0.625ms. Keyboards advertise often when reconnecting, so even
+     * the low duty cycle catches them within a second or two. */
     struct ble_gap_disc_params p = {
-        .itvl = 0x60,   /* 60ms */
-        .window = 0x30, /* 30ms - leave airtime for Wi-Fi */
+        .itvl = s_wifi_active ? 0x100 : 0x60,   /* 160ms : 60ms */
+        .window = s_wifi_active ? 0x20 : 0x30,  /* 20ms (12%) : 30ms (50%) */
         .passive = 0,
         .filter_duplicates = 0,
     };
@@ -496,6 +499,15 @@ void ble_host_start_pairing(int seconds)
     s_pair_until = esp_timer_get_time() + (int64_t)seconds * 1000000;
     ESP_LOGI(TAG, "pairing mode for %ds - put your keyboard into pairing mode", seconds);
     start_scan();
+}
+
+void ble_host_set_wifi_active(bool on)
+{
+    s_wifi_active = on;
+    if (ble_gap_disc_active()) {
+        ble_gap_disc_cancel();
+        start_scan();
+    }
 }
 
 void ble_host_forget_all(void)
