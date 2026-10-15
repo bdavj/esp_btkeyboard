@@ -33,6 +33,13 @@ label{display:flex;gap:6px;align-items:center;color:var(--dim);font-size:13px}
 .kb .r{display:flex;gap:4px;margin-bottom:4px}
 .kb .k{flex:1 1 0;min-width:0;min-height:42px;font-size:13px;padding:0}
 .danger{background:#4a2326}
+.chips{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-top:8px}
+.chip{min-height:36px;font-size:14px}.chip.on{background:var(--acc)}
+#spam-row{justify-content:space-between}
+#spam-row label{font-size:16px;color:var(--txt)}
+#spam-row input{width:22px;height:22px}
+#spam-t{font-variant-numeric:tabular-nums}
+section.spamming{outline:2px solid var(--lock)}
 .small{font-size:12px;color:var(--dim)}
 details summary{cursor:pointer;color:var(--dim);font-size:12px;text-transform:uppercase;letter-spacing:.06em;list-style:none}
 details summary::before{content:"▸ "}details[open] summary::before{content:"▾ "}
@@ -55,6 +62,25 @@ details summary::before{content:"▸ "}details[open] summary::before{content:"�
   <button class="mod" data-mod="4">Alt</button>
   <button class="mod" data-mod="8">Win/⌘</button>
 </div>
+
+<section id="spam-sec">
+  <h2>BIOS spam</h2>
+  <div class="row" id="spam-row" style="margin-top:0">
+    <label><input type="checkbox" id="spam"> Spam boot keys</label>
+    <span id="spam-t" class="small"></span>
+  </div>
+  <div class="chips" id="chips">
+    <button class="chip on" data-sk="76">Del</button>
+    <button class="chip on" data-sk="41">Esc</button>
+    <button class="chip on" data-sk="59">F2</button>
+    <button class="chip on" data-sk="69">F12</button>
+    <button class="chip" data-sk="58">F1</button>
+    <button class="chip" data-sk="67">F10</button>
+    <button class="chip" data-sk="68">F11</button>
+    <button class="chip" data-sk="40">Enter</button>
+  </div>
+  <div class="small" style="margin-top:6px">Cycles the selected keys until the machine enters setup (stops after 60s). Keeps running if your phone locks.</div>
+</section>
 
 <section>
   <h2>Keys</h2>
@@ -122,6 +148,7 @@ details summary::before{content:"▸ "}details[open] summary::before{content:"�
     <button id="forget" class="danger">Forget all</button>
     <button id="off" class="danger">Wi-Fi off</button>
   </div>
+  <div class="row"><button id="flash" class="danger">Flash mode (reboot into download mode)</button></div>
 </section>
 
 <script>
@@ -154,6 +181,9 @@ details summary::before{content:"▸ "}details[open] summary::before{content:"�
       ? 'Type this on the keyboard, then Enter:'
       : 'Pairing: put your keyboard in pairing mode…';
     $('pk').textContent = s.pk >= 0 ? String(s.pk).padStart(6, '0') : '';
+    $('spam').checked = s.spam > 0;
+    $('spam-t').textContent = s.spam > 0 ? `${s.spam}s left` : '';
+    $('spam-sec').classList.toggle('spamming', s.spam > 0);
   }
 
   // ---- modifiers: tap = once, tap again = lock, again = off ----
@@ -265,10 +295,22 @@ details summary::before{content:"▸ "}details[open] summary::before{content:"�
     if (del || add) send('t' + '\b'.repeat(del) + norm(add));
   });
 
+  // ---- BIOS spam ----
+  const spamKeys = () => [...document.querySelectorAll('.chip.on')].map(c => c.dataset.sk).join(' ');
+  const sendSpam = () => send('b' + ($('spam').checked ? spamKeys() : ''));
+  $('spam').onchange = sendSpam;
+  $('chips').addEventListener('click', e => {
+    const c = e.target.closest('.chip');
+    if (!c) return;
+    c.classList.toggle('on');
+    if ($('spam').checked) sendSpam();
+  });
+
   // ---- device ----
   $('pair').onclick = () => send('p');
-  $('release').onclick = () => { send('r'); send('c'); };
+  $('release').onclick = () => { send('r'); send('c'); send('b'); };
   $('forget').onclick = () => { if (confirm('Forget all paired keyboards?')) send('f'); };
+  $('flash').onclick = () => { if (confirm('Reboot into download mode for flashing? The keyboard stops working until it is reflashed or replugged.')) send('F'); };
   $('off').onclick = () => { if (confirm('Turn Wi-Fi off? Tap the device button to turn it back on.')) send('x'); };
 })();
 </script>

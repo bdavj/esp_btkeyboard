@@ -4,7 +4,9 @@
  *   t<text>         type UTF-8 text c               cancel typing
  *   r               release all     s               status (JSON reply)
  *   p               pair keyboard   f               forget all keyboards
- *   x               turn Wi-Fi off */
+ *   x               turn Wi-Fi off
+ *   b<k> <k> ...    BIOS spam: cycle these key codes ("b" alone stops)
+ *   F               reboot into USB download mode (for flashing) */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -13,6 +15,10 @@
 #include <unistd.h>
 #include "esp_http_server.h"
 #include "esp_log.h"
+#include "esp_system.h"
+#include "soc/rtc_cntl_reg.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "esp_netif.h"
 #include "esp_timer.h"
 #include "esp_wifi.h"
@@ -24,6 +30,7 @@ extern const char index_html_start[] asm("_binary_index_html_start");
 extern const char index_html_end[] asm("_binary_index_html_end");
 
 #define MAX_FRAME 8192
+#define SPAM_SECONDS 60
 
 static httpd_handle_t s_httpd;
 static volatile int s_ws_fd = -1;
@@ -48,9 +55,9 @@ static esp_err_t send_status(httpd_req_t *req)
     ble_host_status(&st);
 
     char buf[512];
-    int n = snprintf(buf, sizeof(buf), "{\"usb\":%d,\"sleep\":%d,\"pair\":%d,\"pk\":%d,\"q\":%u,\"kb\":[",
+    int n = snprintf(buf, sizeof(buf), "{\"usb\":%d,\"sleep\":%d,\"pair\":%d,\"pk\":%d,\"q\":%u,\"spam\":%d,\"kb\":[",
                      usb_kbd_mounted(), usb_kbd_suspended(), st.pairing, st.passkey,
-                     (unsigned)kb_type_pending());
+                     (unsigned)kb_type_pending(), kb_spam_remaining());
     for (int i = 0; i < st.count && n < sizeof(buf) - 64; i++) {
         n += snprintf(buf + n, sizeof(buf) - n, "%s{\"n\":\"%s\",\"r\":%d}", i ? "," : "", st.kb[i].name,
                       st.kb[i].ready);
@@ -89,6 +96,26 @@ static esp_err_t handle_msg(httpd_req_t *req, char *msg, size_t len)
     case 'x':
         app_post(EV_WEB_OFF);
         break;
+    case 'F':
+        ESP_LOGW(TAG, "rebooting into download mode");
+        kb_web_release();
+        vTaskDelay(pdMS_TO_TICKS(200));
+        REG_WRITE(RTC_CNTL_OPTION1_REG, RTC_CNTL_FORCE_DOWNLOAD_BOOT);
+        esp_restart();
+        break;
+    case 'b': {
+        uint8_t keys[KB_SPAM_MAX_KEYS];
+        int n = 0;
+        char *p = msg + 1, *end;
+        while (n < KB_SPAM_MAX_KEYS) {
+            unsigned long v = strtoul(p, &end, 10);
+            if (end == p) break;
+            if (v > 3 && v < 0xE0) keys[n++] = v; /* ordinary keys only, no modifiers */
+            p = end;
+        }
+        kb_spam_start(keys, n, SPAM_SECONDS);
+        break;
+    }
     }
     return ESP_OK;
 }

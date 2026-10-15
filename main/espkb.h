@@ -27,7 +27,8 @@ bool usb_kbd_suspended(void);
  * own modifier byte and 6 keys. The USB report is the union of all sources. */
 #define KB_SRC_WEB  (CONFIG_ESPKB_MAX_KEYBOARDS)
 #define KB_SRC_TYPE (CONFIG_ESPKB_MAX_KEYBOARDS + 1)
-#define KB_NSRC     (CONFIG_ESPKB_MAX_KEYBOARDS + 2)
+#define KB_SRC_SPAM (CONFIG_ESPKB_MAX_KEYBOARDS + 2)
+#define KB_NSRC     (CONFIG_ESPKB_MAX_KEYBOARDS + 3)
 
 void kb_init(void);
 void kb_set_source(int src, uint8_t mods, const uint8_t keys[6]);
@@ -36,6 +37,13 @@ void kb_web_release(void);
 bool kb_type(const char *utf8, size_t len);
 void kb_type_cancel(void);
 size_t kb_type_pending(void);
+
+/* "BIOS spam": repeatedly tap keys (e.g. Del/Esc/F2/F12) so the host's
+ * firmware catches one during boot. n == 0 stops. Runs on the device, so it
+ * keeps going while the phone sleeps or the host reboots. */
+#define KB_SPAM_MAX_KEYS 8
+void kb_spam_start(const uint8_t *keys, int n, int seconds);
+int kb_spam_remaining(void); /* seconds left, 0 when off */
 
 /* ---- character -> HID usage (keymap.c) ---- */
 #define KM_SHIFT 0x02
