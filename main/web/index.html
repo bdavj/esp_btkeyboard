@@ -234,7 +234,11 @@ details summary::before{content:"â–¸ "}details[open] summary::before{content:"â–
     clearOnce();
   }
   ['pointerup', 'pointercancel', 'lostpointercapture'].forEach(t => document.addEventListener(t, up));
-  window.addEventListener('blur', () => { held.clear(); send('r'); });
+  // Page hidden, app switched, phone locked: let go of everything.
+  const releaseAll = () => { held.clear(); document.querySelectorAll('.down').forEach(el => el.classList.remove('down')); send('r'); };
+  window.addEventListener('blur', releaseAll);
+  window.addEventListener('pagehide', releaseAll);
+  document.addEventListener('visibilitychange', () => { if (document.hidden) releaseAll(); });
   document.addEventListener('contextmenu', e => { if (e.target.closest('[data-k]')) e.preventDefault(); });
 
   // ---- full keyboard ----

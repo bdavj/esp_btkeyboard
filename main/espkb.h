@@ -72,6 +72,7 @@ void ble_host_set_leds(uint8_t leds);
  * can complete the WPA2 handshake. */
 void ble_host_set_wifi_active(bool on);
 void ble_host_status(ble_status_t *out);
+int ble_host_debug(char *buf, size_t size); /* multi-line text for the serial status */
 
 /* ---- Wi-Fi AP + web UI (web.c) ---- */
 void web_init(void);

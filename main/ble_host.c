@@ -277,6 +277,10 @@ static int on_svc(uint16_t conn, const struct ble_gatt_error *err, const struct 
 
 /* ---- GAP ---- */
 
+static volatile uint32_t s_n_notify, s_n_reports, s_n_rejected;
+static volatile uint16_t s_last_uuid, s_last_len;
+static uint8_t s_last_data[8];
+
 static void handle_report(int i, uint16_t attr, struct os_mbuf *om)
 {
     slot_t *s = &s_slots[i];
@@ -286,15 +290,38 @@ static void handle_report(int i, uint16_t attr, struct os_mbuf *om)
     for (int k = 0; k < s->nchrs; k++) {
         if (s->chrs[k].val_handle == attr) uuid = s->chrs[k].uuid;
     }
-    uint8_t buf[8];
     uint16_t len = OS_MBUF_PKTLEN(om);
-    if (len != 8) return;
-
-    /* Prefer the boot keyboard report; otherwise assume an 8-byte report is a keyboard. */
-    if (uuid == UUID_BOOT_KB_IN || (uuid == UUID_REPORT && !s->has_boot_in)) {
-        os_mbuf_copydata(om, 0, 8, buf);
-        kb_set_source(i, buf[0], &buf[2]);
+    s_n_notify++;
+    s_last_uuid = uuid;
+    s_last_len = len;
+    if (len < 8 || len > 16) {
+        s_n_rejected++;
+        return;
     }
+    uint8_t buf[8];
+    os_mbuf_copydata(om, 0, 8, buf);
+    memcpy(s_last_data, buf, 8);
+
+    /* Keyboards don't always honour the switch to boot protocol, so take a
+     * standard keyboard report from either characteristic. Standard layout:
+     * modifiers, reserved (0), six key codes (< 0xE8). Anything else (mouse,
+     * consumer, vendor) is ignored. */
+    if (uuid != UUID_BOOT_KB_IN && uuid != UUID_REPORT) {
+        s_n_rejected++;
+        return;
+    }
+    if (buf[1] != 0) {
+        s_n_rejected++;
+        return;
+    }
+    for (int k = 2; k < 8; k++) {
+        if (buf[k] >= 0xE8) {
+            s_n_rejected++;
+            return;
+        }
+    }
+    s_n_reports++;
+    kb_set_source(i, buf[0], &buf[2]);
 }
 
 static int gap_event(struct ble_gap_event *ev, void *arg)
@@ -532,6 +559,27 @@ void ble_host_set_leds(uint8_t leds)
     for (int i = 0; i < NSLOTS; i++) {
         if (s_slots[i].used) send_leds(&s_slots[i]);
     }
+}
+
+int ble_host_debug(char *buf, size_t size)
+{
+    int n = 0;
+    n += snprintf(buf + n, size - n, "ble: synced=%d scanning=%d pairing=%d notify=%lu reports=%lu rejected=%lu last_uuid=0x%04x last_len=%u last=%02x %02x %02x %02x %02x %02x %02x %02x\r\n",
+                  s_synced, ble_gap_disc_active(), ble_host_pairing(), (unsigned long)s_n_notify,
+                  (unsigned long)s_n_reports, (unsigned long)s_n_rejected, s_last_uuid, s_last_len,
+                  s_last_data[0], s_last_data[1], s_last_data[2], s_last_data[3], s_last_data[4],
+                  s_last_data[5], s_last_data[6], s_last_data[7]);
+    for (int i = 0; i < NSLOTS && n < size; i++) {
+        slot_t *s = &s_slots[i];
+        if (!s->used) continue;
+        n += snprintf(buf + n, size - n, "  kb[%d] '%s' conn=%d ready=%d boot_in=%d chrs=%d:", i, s->name, s->conn, s->ready,
+                      s->has_boot_in, s->nchrs);
+        for (int k = 0; k < s->nchrs && n < size; k++) {
+            n += snprintf(buf + n, size - n, " %04x/p%02x/c%d", s->chrs[k].uuid, s->chrs[k].props, s->chrs[k].cccd != 0);
+        }
+        n += snprintf(buf + n, size - n, "\r\n");
+    }
+    return n;
 }
 
 void ble_host_status(ble_status_t *out)

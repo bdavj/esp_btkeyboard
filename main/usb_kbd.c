@@ -78,6 +78,7 @@ static const char *s_str_desc[] = {
 };
 
 static QueueHandle_t s_txq;
+static volatile uint32_t s_n_queued, s_n_sent, s_n_refused, s_n_suspended, s_n_qfull;
 
 uint8_t const *tud_hid_descriptor_report_cb(uint8_t instance)
 {
@@ -110,24 +111,39 @@ static bool has_keys(const uint8_t r[8])
 
 static void tx_task(void *arg)
 {
-    uint8_t r[8];
+    /* Reports normally go out in order, one per queue item. If one can't be
+     * delivered (host asleep, endpoint busy, cable yanked), we keep the latest
+     * desired state and retry until the host has it, so a key never stays
+     * stuck down. Intermediate states may be skipped in that case. */
+    uint8_t latest[8] = {0};
+    bool dirty = false, woke = false;
     for (;;) {
-        xQueueReceive(s_txq, r, portMAX_DELAY);
-        if (!tud_mounted()) continue;
+        uint8_t r[8];
+        if (xQueueReceive(s_txq, r, pdMS_TO_TICKS(dirty ? 20 : 1000)) == pdTRUE) {
+            memcpy(latest, r, sizeof(latest));
+            dirty = true;
+            s_n_queued++;
+        }
+        if (!dirty || !tud_mounted()) continue;
 
         if (tud_suspended()) {
-            /* Only a press should wake the host; releases while asleep are moot. */
-            if (!has_keys(r)) continue;
-            tud_remote_wakeup();
-            for (int i = 0; i < 100 && tud_suspended(); i++) vTaskDelay(pdMS_TO_TICKS(10));
-            if (tud_suspended()) continue;
+            s_n_suspended++;
+            /* Only a key press should wake the host; a release waits for resume. */
+            if (has_keys(latest) && !woke) {
+                tud_remote_wakeup();
+                woke = true;
+            }
+            continue;
         }
+        woke = false;
 
-        for (int i = 0; i < 500 && tud_mounted() && !tud_hid_ready(); i++) {
-            vTaskDelay(pdMS_TO_TICKS(1));
-        }
-        if (!tud_hid_keyboard_report(0, r[0], &r[2])) {
-            ESP_LOGW(TAG, "report dropped");
+        for (int i = 0; i < 50 && !tud_hid_ready(); i++) vTaskDelay(pdMS_TO_TICKS(1));
+        if (tud_hid_keyboard_report(0, latest[0], &latest[2])) {
+            dirty = false;
+            s_n_sent++;
+        } else {
+            s_n_refused++;
+            ESP_LOGW(TAG, "report not accepted, retrying");
         }
     }
 }
@@ -171,6 +187,15 @@ static void on_rx(int itf, cdcacm_event_t *ev)
                      web_sta_count(), web_join_count(), web_leave_count(), web_last_leave_reason(), st.count,
                      (unsigned)esp_get_free_heap_size());
             cdc_print(itf, line);
+            snprintf(line, sizeof(line), "hid: queued=%lu sent=%lu refused=%lu suspended_waits=%lu queue_full=%lu ready=%d\r\n",
+                     (unsigned long)s_n_queued, (unsigned long)s_n_sent, (unsigned long)s_n_refused,
+                     (unsigned long)s_n_suspended, (unsigned long)s_n_qfull, tud_hid_ready());
+            cdc_print(itf, line);
+            {
+                static char dbg[640];
+                ble_host_debug(dbg, sizeof(dbg));
+                cdc_print(itf, dbg);
+            }
             cdc_print(itf, app_boot_report());
             break;
         }
@@ -216,6 +241,7 @@ void usb_kbd_init(void)
 void usb_kbd_send(const uint8_t report[8])
 {
     if (xQueueSend(s_txq, report, pdMS_TO_TICKS(100)) != pdTRUE) {
+        s_n_qfull++;
         ESP_LOGW(TAG, "tx queue full");
     }
 }

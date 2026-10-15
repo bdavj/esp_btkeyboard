@@ -43,8 +43,9 @@ to install ESP-IDF.
    python3 -m pip install --user 'esptool<5'
    ```
 
-4. **Put the AtomS3U in download mode.** Plug it in and hold the side reset
-   button for about 2s until the LED turns green. Check that a port appeared:
+4. **Put the AtomS3U in download mode.** Unplug it, hold the side button, plug
+   it back in, let go when the LED turns green. Use a USB port that passes
+   data (not a dock's charge-only port). Check that a port appeared:
 
    ```bash
    ls /dev/cu.usbmodem*
@@ -56,8 +57,8 @@ to install ESP-IDF.
    cd build && python3 -m esptool --chip esp32s3 -p /dev/cu.usbmodem* -b 460800 write_flash @flash_args
    ```
 
-6. **Unplug and replug** the AtomS3U, or let esptool reset it. It now shows up
-   as **"espkb BLE-to-USB keyboard"**.
+6. **Unplug and replug** the AtomS3U (it stays in download mode after
+   flashing). It now shows up as **"espkb BLE-to-USB keyboard"**.
    - **macOS opens the Keyboard Setup Assistant.** Click Continue, press the key
      it asks for on your **BT keyboard** once that's paired, or just close it
      and pick the layout yourself: ANSI for US, ISO for UK.
@@ -107,6 +108,12 @@ Classic on others.
 2. Put the keyboard into pairing mode.
 3. If the keyboard asks for a passkey, the web UI shows a 6-digit code (it also
    goes to the serial log). Type it on the BT keyboard, then press Enter.
+4. The LED flashes green once the keyboard is connected and set up. From then
+   on it reconnects by itself whenever it's switched on and in range.
+
+Keychron K-series: slide the back switch to BT, then hold `Fn+1` (or `2`/`3`
+for the other slots) for about 4 seconds until the light flashes quickly. To
+switch back to that slot later, tap `Fn+1`.
 
 ### BIOS spam
 
@@ -186,14 +193,22 @@ idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.devkitc" bui
 
 ### Flashing
 
-Once this firmware runs, TinyUSB owns the USB port, so the board no longer shows
-up as a serial port. To flash, put it into download mode:
+Once this firmware runs, the board shows up as a keyboard plus a small serial
+port, not as a flashable device. To flash, put it into download mode first.
+The reliable way, especially through a dock, is a **power-up with the button
+held**:
 
-- **Easiest, any board running espkb**: in the web UI, tap **Flash mode**. The
-  device reboots into USB download mode. Replugging it returns to normal.
-- **AtomS3U**: hold the side reset button for about 2s until the LED turns
-  green. It then enumerates as a USB-JTAG/serial device.
-- **DevKitC**: hold BOOT, tap RST, release BOOT. Or flash through the UART port.
+- **AtomS3U**: unplug it, hold the side button, plug it back in, let go when
+  the LED turns green. It now enumerates as "USB JTAG/serial debug unit".
+- **DevKitC**: hold BOOT while plugging in (or hold BOOT, tap RST).
+
+There is also a software route (the web UI's **Flash mode** button, or `B` on
+the serial port, or opening the serial port at 1200 baud). The board does reboot
+into download mode, but some USB docks don't re-enumerate it afterwards, so you
+may end up replugging anyway.
+
+Use a USB port that passes data: a dock's charge-only or "charging" port
+won't show the device at all, in either mode.
 
 With esptool (works with the Docker build, see Quick start):
 
@@ -207,12 +222,60 @@ Or with a local ESP-IDF install:
 idf.py -p /dev/cu.usbmodem* flash
 ```
 
+After flashing, the board stays in download mode: **unplug and replug it**
+(no button) to start the new firmware.
+
 On macOS, Docker can't reach USB serial ports, which is why the flash step runs
 outside the container.
 
-Logs go to UART0 (TX = GPIO43 on the S3) at 115200 baud. The AtomS3U doesn't
-break that pin out conveniently, so for debugging, a DevKitC's UART port is
-easier.
+### Serial port: status and commands
+
+While running, the board exposes a USB serial port (`/dev/cu.usbmodem*` on
+macOS, 115200 baud). Single characters are commands:
+
+| Key | Does |
+|---|---|
+| `s` | Status: uptime, USB, Wi-Fi joins/drops, keyboards, HID delivery counters, BLE detail, last reset and crash summary |
+| `w` / `x` | Wi-Fi on / off |
+| `p` | Pairing mode |
+| `B` | Reboot into download mode |
+| `?` | Help |
+
+For example:
+
+```bash
+python3 -c "import serial,glob,time; s=serial.Serial(glob.glob('/dev/cu.usbmodem*')[0],115200,timeout=2); s.write(b's'); time.sleep(1.5); print(s.read(4000).decode())"
+```
+
+The full ESP log can also be sent to this port (menuconfig → espkb →
+*Also send the full ESP log to the USB serial port*). It's off by default
+because it deepens the stack use of system tasks; by default the log goes to
+UART0 (TX = GPIO43), which the AtomS3U doesn't break out.
+
+### If it crashes
+
+A crash writes a core dump to flash. The `s` status shows a one-line summary
+after the next boot (task, PC, backtrace addresses). To decode addresses:
+
+```bash
+docker run --rm -v "$PWD":/project -w /project espressif/idf:v5.4.2 xtensa-esp32s3-elf-addr2line -pfiaC -e build/espkb.elf 0x40375b9d 0x40381101
+```
+
+If the board crash-loops so fast it never shows up on USB, put it in download
+mode and pull the dump out with esptool (offset from `partitions.csv`):
+
+```bash
+cd build && python3 -m esptool --chip esp32s3 -p /dev/cu.usbmodem* read_flash 0x1d0000 0x10000 coredump.bin
+```
+
+```bash
+docker run --rm -v "$PWD":/project -w /project espressif/idf:v5.4.2 bash -c '. /opt/esp/idf/export.sh >/dev/null; esp-coredump info_corefile -t raw -c build/coredump.bin build/espkb.elf'
+```
+
+"A stack overflow in task X" means that task's `xTaskCreate` stack size needs
+raising. Mysterious crashes inside Wi-Fi or Bluetooth with garbage pointers
+were, in this project's history, exactly that: a small task overflowing into
+the heap block below it.
 
 ## How it works
 
@@ -239,6 +302,12 @@ phone ──WebSocket──▶ web.c ──keys / text──────┘     
   released.
 
 ## Limitations / ideas
+
+- Typing from the phone is paced by how often the host collects USB reports.
+  Through some hubs/docks that's slower than the 1 ms the device asks for, so
+  a key release can need a retry and text comes out at maybe 10 characters a
+  second. Making the USB send path event-driven (next report on completion of
+  the previous one) would fix that.
 
 - **Boot protocol** means only standard keys come through. Media and consumer
   keys (volume, brightness) are dropped. Supporting them would need report-map
