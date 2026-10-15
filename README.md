@@ -289,14 +289,16 @@ phone ──WebSocket──▶ web.c ──keys / text──────┘     
 - `ble_host.c`: NimBLE central. It scans continuously and reconnects bonded
   keyboards whenever they advertise. In pairing mode it also accepts new
   devices that advertise the HID service. After encrypting the link, it
-  discovers the HID service, switches the keyboard to **Boot Protocol** (a
-  fixed 8-byte report that can go straight to USB unchanged), and subscribes to
+  discovers the HID service, reads the Report Map, switches the keyboard to
+  **Boot Protocol** (a fixed 8-byte report that can go straight to USB
+  unchanged) unless Report Protocol is needed for media keys, and subscribes to
   its input reports.
 - `keyboard.c`: Each input (every BLE keyboard, web key presses, web typing,
   BIOS spam) is a separate source. The USB report is the union of all of them, so you can
   hold Ctrl on the real keyboard and tap a key on the phone.
 - `usb_kbd.c`: TinyUSB, one boot-keyboard interface with no report IDs (the
-  shape BIOSes expect), plus remote wakeup.
+  shape BIOSes expect) plus a consumer-control interface for media keys, and
+  remote wakeup.
 - `web.c` + `web/index.html`: Soft-AP and a single WebSocket, so key
   down/up events stay in order. If the socket drops, every web-held key is
   released.
@@ -310,9 +312,13 @@ phone ──WebSocket──▶ web.c ──keys / text──────┘     
   If a host drops characters, set an extra delay with menuconfig → espkb →
   "Extra delay between key events".
 
-- **Boot protocol** means only standard keys come through. Media and consumer
-  keys (volume, brightness) are dropped. Supporting them would need report-map
-  parsing and a second USB HID interface.
+- Media keys (volume, play/pause, brightness...) are forwarded through a second
+  USB HID interface (consumer control). The keyboard's Report Map is parsed to
+  find its consumer report; if the map has both a standard keyboard report and a
+  consumer report the keyboard is left in Report Protocol, otherwise it is put in
+  Boot Protocol and media keys are not available. Only one media key at a time
+  is sent, and keyboards whose Report Protocol keyboard report is a bitmap (NKRO)
+  rather than the standard 8 bytes still need Boot Protocol, so lose media keys.
 - Keyboards that use **resolvable private addresses** (rotating MACs) may not
   reconnect automatically after pairing. Most keyboards use a fixed address.
 - Only one new keyboard pairs per pairing session (by design, so it doesn't

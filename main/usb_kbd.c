@@ -1,8 +1,9 @@
 /* USB HID keyboard using TinyUSB.
  *
  * Exposes a boot-protocol keyboard interface with no report IDs, so it works
- * in BIOS/UEFI setup screens as well as in an OS. Supports remote wakeup so a
- * key press on a BLE keyboard can wake a sleeping laptop.
+ * in BIOS/UEFI setup screens as well as in an OS, plus a second HID interface
+ * for consumer control (media keys: volume, play/pause...). Supports remote
+ * wakeup so a key press on a BLE keyboard can wake a sleeping laptop.
  *
  * With CONFIG_ESPKB_USB_LOG, a CDC-ACM serial port is added alongside the
  * keyboard and the ESP log is redirected to it. */
@@ -26,19 +27,26 @@
 
 static const char *TAG = "usb";
 
-static const uint8_t s_report_desc[] = {TUD_HID_REPORT_DESC_KEYBOARD()};
+/* HID instance numbers (TinyUSB assigns them in interface order). The
+ * keyboard must stay instance 0 / interface 0 with no report ID for BIOSes. */
+enum { HID_KBD, HID_CONSUMER };
+_Static_assert(CONFIG_TINYUSB_HID_COUNT >= 2, "set CONFIG_TINYUSB_HID_COUNT=2 for the consumer-control interface");
+
+static const uint8_t s_report_desc_kbd[] = {TUD_HID_REPORT_DESC_KEYBOARD()};
+static const uint8_t s_report_desc_consumer[] = {TUD_HID_REPORT_DESC_CONSUMER()};
 
 #if CONFIG_ESPKB_USB_LOG
-enum { ITF_HID, ITF_CDC, ITF_CDC_DATA, ITF_COUNT };
-#define CFG_LEN (TUD_CONFIG_DESC_LEN + TUD_HID_DESC_LEN + TUD_CDC_DESC_LEN)
+enum { ITF_HID, ITF_HID_CONSUMER, ITF_CDC, ITF_CDC_DATA, ITF_COUNT };
+#define CFG_LEN (TUD_CONFIG_DESC_LEN + 2 * TUD_HID_DESC_LEN + TUD_CDC_DESC_LEN)
 #else
-enum { ITF_HID, ITF_COUNT };
-#define CFG_LEN (TUD_CONFIG_DESC_LEN + TUD_HID_DESC_LEN)
+enum { ITF_HID, ITF_HID_CONSUMER, ITF_COUNT };
+#define CFG_LEN (TUD_CONFIG_DESC_LEN + 2 * TUD_HID_DESC_LEN)
 #endif
 
 static const uint8_t s_cfg_desc[] = {
     TUD_CONFIG_DESCRIPTOR(1, ITF_COUNT, 0, CFG_LEN, TUSB_DESC_CONFIG_ATT_REMOTE_WAKEUP, 100),
-    TUD_HID_DESCRIPTOR(ITF_HID, 4, HID_ITF_PROTOCOL_KEYBOARD, sizeof(s_report_desc), 0x81, 8, 1),
+    TUD_HID_DESCRIPTOR(ITF_HID, 4, HID_ITF_PROTOCOL_KEYBOARD, sizeof(s_report_desc_kbd), 0x81, 8, 1),
+    TUD_HID_DESCRIPTOR(ITF_HID_CONSUMER, 6, HID_ITF_PROTOCOL_NONE, sizeof(s_report_desc_consumer), 0x84, 2, 8),
 #if CONFIG_ESPKB_USB_LOG
     TUD_CDC_DESCRIPTOR(ITF_CDC, 5, 0x82, 8, 0x03, 0x83, 64),
 #endif
@@ -75,7 +83,15 @@ static const char *s_str_desc[] = {
     "000001",
     "Keyboard",
     "espkb log",
+    "Consumer control",
 };
+
+/* One queued report: which HID instance it is for, and its payload (8 bytes
+ * for the keyboard, a 16-bit usage ID for consumer control). */
+typedef struct {
+    uint8_t itf;
+    uint8_t data[8];
+} tx_item_t;
 
 static QueueHandle_t s_txq;
 static TaskHandle_t s_tx_task;
@@ -83,7 +99,7 @@ static volatile uint32_t s_n_queued, s_n_sent, s_n_refused, s_n_suspended, s_n_q
 
 uint8_t const *tud_hid_descriptor_report_cb(uint8_t instance)
 {
-    return s_report_desc;
+    return instance == HID_CONSUMER ? s_report_desc_consumer : s_report_desc_kbd;
 }
 
 uint16_t tud_hid_get_report_cb(uint8_t instance, uint8_t report_id, hid_report_type_t type,
@@ -96,18 +112,26 @@ void tud_hid_set_report_cb(uint8_t instance, uint8_t report_id, hid_report_type_
                            uint8_t const *buffer, uint16_t bufsize)
 {
     /* Host -> keyboard LED state (Num/Caps/Scroll lock). Forward to BLE keyboards. */
-    if (type == HID_REPORT_TYPE_OUTPUT && bufsize >= 1) {
+    if (instance == HID_KBD && type == HID_REPORT_TYPE_OUTPUT && bufsize >= 1) {
         ble_host_set_leds(buffer[0]);
     }
 }
 
-static bool has_keys(const uint8_t r[8])
+static bool has_keys(const tx_item_t *it)
 {
+    const uint8_t *r = it->data;
+    if (it->itf == HID_CONSUMER) return r[0] || r[1];
     if (r[0]) return true;
     for (int i = 2; i < 8; i++) {
         if (r[i]) return true;
     }
     return false;
+}
+
+static bool send_item(const tx_item_t *it)
+{
+    if (it->itf == HID_CONSUMER) return tud_hid_n_report(HID_CONSUMER, 0, it->data, 2);
+    return tud_hid_keyboard_report(0, it->data[0], &it->data[2]);
 }
 
 /* tx_task sleeps until something changes: a report is queued, the host has
@@ -144,10 +168,10 @@ static void tx_task(void *arg)
      * (host asleep, endpoint busy, cable yanked), we keep the latest desired
      * state and retry until the host has it, so a key never stays stuck down.
      * Intermediate states may be skipped in that case. */
-    uint8_t latest[8] = {0};
+    tx_item_t latest = {0};
     bool dirty = false, woke = false;
     for (;;) {
-        if (!dirty && xQueueReceive(s_txq, latest, 0) == pdTRUE) {
+        if (!dirty && xQueueReceive(s_txq, &latest, 0) == pdTRUE) {
             dirty = true;
             s_n_queued++;
         }
@@ -155,14 +179,14 @@ static void tx_task(void *arg)
             if (tud_suspended()) {
                 s_n_suspended++;
                 /* Only a key press should wake the host; a release waits for resume. */
-                if (has_keys(latest) && !woke) {
+                if (has_keys(&latest) && !woke) {
                     tud_remote_wakeup();
                     woke = true;
                 }
             } else {
                 woke = false;
-                if (tud_hid_ready()) {
-                    if (tud_hid_keyboard_report(0, latest[0], &latest[2])) {
+                if (tud_hid_n_ready(latest.itf)) {
+                    if (send_item(&latest)) {
                         dirty = false;
                         s_n_sent++;
                         continue; /* pull the next report; it waits for the completion */
@@ -217,12 +241,13 @@ static void on_rx(int itf, cdcacm_event_t *ev)
                      web_sta_count(), web_join_count(), web_leave_count(), web_last_leave_reason(), st.count,
                      (unsigned)esp_get_free_heap_size());
             cdc_print(itf, line);
-            snprintf(line, sizeof(line), "hid: queued=%lu sent=%lu refused=%lu suspended_waits=%lu queue_full=%lu ready=%d\r\n",
+            snprintf(line, sizeof(line), "hid: queued=%lu sent=%lu refused=%lu suspended_waits=%lu queue_full=%lu ready=%d consumer_ready=%d\r\n",
                      (unsigned long)s_n_queued, (unsigned long)s_n_sent, (unsigned long)s_n_refused,
-                     (unsigned long)s_n_suspended, (unsigned long)s_n_qfull, tud_hid_ready());
+                     (unsigned long)s_n_suspended, (unsigned long)s_n_qfull, tud_hid_n_ready(HID_KBD),
+                     tud_hid_n_ready(HID_CONSUMER));
             cdc_print(itf, line);
             {
-                static char dbg[640];
+                static char dbg[1024];
                 ble_host_debug(dbg, sizeof(dbg));
                 cdc_print(itf, dbg);
             }
@@ -242,7 +267,7 @@ static void on_rx(int itf, cdcacm_event_t *ev)
 
 void usb_kbd_init(void)
 {
-    s_txq = xQueueCreate(TX_QUEUE_LEN, 8);
+    s_txq = xQueueCreate(TX_QUEUE_LEN, sizeof(tx_item_t));
 
     const tinyusb_config_t cfg = {
         .device_descriptor = &s_dev_desc,
@@ -268,17 +293,30 @@ void usb_kbd_init(void)
     ESP_LOGI(TAG, "USB HID keyboard ready");
 }
 
-void usb_kbd_send(const uint8_t report[8])
+static void enqueue(const tx_item_t *it)
 {
     /* The queue drains at the host's poll rate (1-8 ms per report), so a wait
      * here only means a burst outran the host; keep the queue short so that
      * cancelling text typing doesn't leave much already queued. */
-    if (xQueueSend(s_txq, report, pdMS_TO_TICKS(TX_QUEUE_WAIT_MS)) == pdTRUE) {
+    if (xQueueSend(s_txq, it, pdMS_TO_TICKS(TX_QUEUE_WAIT_MS)) == pdTRUE) {
         tx_notify();
     } else {
         s_n_qfull++;
         ESP_LOGW(TAG, "tx queue full");
     }
+}
+
+void usb_kbd_send(const uint8_t report[8])
+{
+    tx_item_t it = {.itf = HID_KBD};
+    memcpy(it.data, report, 8);
+    enqueue(&it);
+}
+
+void usb_kbd_send_consumer(uint16_t usage)
+{
+    tx_item_t it = {.itf = HID_CONSUMER, .data = {usage & 0xFF, usage >> 8}};
+    enqueue(&it);
 }
 
 bool usb_kbd_mounted(void)

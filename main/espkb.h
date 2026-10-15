@@ -21,6 +21,8 @@ const char *app_boot_report(void);
 /* ---- USB HID boot keyboard (usb_kbd.c) ---- */
 void usb_kbd_init(void);
 void usb_kbd_send(const uint8_t report[8]);
+/* Consumer-control (media) key on the second HID interface; 0 releases. */
+void usb_kbd_send_consumer(uint16_t usage);
 bool usb_kbd_mounted(void);
 bool usb_kbd_suspended(void);
 void usb_kbd_reboot_to_download(void);
